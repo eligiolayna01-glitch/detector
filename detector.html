@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IA Detector - LaynaTech</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Detector de Objetos en Tiempo Real</h1>
+
+    <div class="video-container">
+        <video id="webcam" autoplay muted playsinline></video>
+        <canvas id="outputCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+        <div class="input-group">
+            <label for="inputText">Filtrar objeto:</label>
+            <input type="text" id="inputText" placeholder="Ej: person, cup, cell phone...">
+        </div>
+        <div class="button-group">
+            <button id="startButton">Encender Cámara</button>
+            <button id="stopButton" disabled>Apagar</button>
+        </div>
+    </div>
+
+    <p id="status">Iniciando sistema...</p>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="script.js"></script>
+</body>
+</html>
