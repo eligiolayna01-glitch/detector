@@ -5,64 +5,70 @@ const startButton = document.getElementById('startButton');
 const stopButton = document.getElementById('stopButton');
 const inputText = document.getElementById('inputText');
 const statusElem = document.getElementById('status');
+const voiceInd = document.getElementById('voice-indicator');
 
-let model = undefined;
-let streaming = false;
-let ultimaDeteccion = ""; // Para evitar que la voz repita lo mismo mil veces
+let model, streaming = false, ultimaDeteccion = "";
 
-// Diccionario de traducción (Iglés -> Español)
 const traducciones = {
     "person": "persona", "bicycle": "bicicleta", "car": "carro", "motorcycle": "moto",
-    "airplane": "avión", "bus": "autobús", "train": "tren", "truck": "camión",
-    "bird": "pájaro", "cat": "gato", "dog": "perro", "backpack": "mochila", 
-    "bottle": "botella", "cup": "taza", "knife": "cuchillo", "spoon": "cuchara", 
-    "bowl": "tazón", "chair": "silla", "couch": "sofá", "potted plant": "planta",
-    "tv": "televisor", "laptop": "laptop", "mouse": "mouse", "cell phone": "celular",
-    "book": "libro", "clock": "reloj", "scissors": "tijeras", "toothbrush": "cepillo de dientes"
-    // ... puedes añadir más del diccionario anterior
+    "dog": "perro", "cat": "gato", "chair": "silla", "cup": "taza", "laptop": "laptop",
+    "cell phone": "celular", "bottle": "botella", "remote": "control", "book": "libro",
+    "backpack": "mochila", "handbag": "bolso", "umbrella": "paraguas", "clock": "reloj"
 };
 
-// --- CONFIGURACIÓN DE VOZ (LECTURA) ---
+// --- CONTROL DE VOZ (SALIDA) ---
 function hablar(texto) {
-    if (window.speechSynthesis.speaking) return; // Si ya está hablando, callar
-    const mensaje = new SpeechSynthesisUtterance(texto);
-    mensaje.lang = 'es-ES';
-    mensaje.rate = 1; 
-    window.speechSynthesis.speak(mensaje);
+    if (window.speechSynthesis.speaking) return; 
+
+    const msg = new SpeechSynthesisUtterance(texto);
+    msg.lang = 'es-ES';
+    msg.rate = 0.9; 
+    
+    msg.onend = () => {
+        // Pausa de 1.5 segundos antes de permitir la siguiente locución
+        setTimeout(() => { ultimaDeteccion = ""; }, 1500);
+    };
+
+    window.speechSynthesis.speak(msg);
 }
 
-// --- CONFIGURACIÓN DE ESCUCHA (RECONOCIMIENTO) ---
+// --- RECONOCIMIENTO DE COMANDOS (ENTRADA) ---
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-const recognition = new Recognition();
-recognition.lang = 'es-ES';
-recognition.continuous = true;
-recognition.interimResults = false;
+const rec = new Recognition();
+rec.lang = 'es-ES';
+rec.continuous = true;
 
-recognition.onresult = (event) => {
-    const comando = event.results[event.results.length - 1][0].transcript.toLowerCase();
-    statusElem.textContent = `Escuché: "${comando}"`;
-    
-    // Si dices "detectar silla", limpia el input y escribe "silla"
-    if (comando.includes("detectar")) {
-        const objetoABuscar = comando.replace("detectar", "").trim();
-        inputText.value = objetoABuscar;
-        hablar(`Buscando ${objetoABuscar}`);
+rec.onstart = () => voiceInd.classList.remove('hidden');
+rec.onend = () => { if(streaming || !streaming) rec.start(); }; 
+
+rec.onresult = (event) => {
+    const speech = event.results[event.results.length - 1][0].transcript.toLowerCase();
+    statusElem.textContent = `Voz: "${speech}"`;
+
+    if (speech.includes("iniciar") || speech.includes("activar")) start();
+    if (speech.includes("detener") || speech.includes("parar")) stop();
+    if (speech.includes("detectar") || speech.includes("buscar")) {
+        const obj = speech.split(" ").pop();
+        inputText.value = obj;
+        hablar(`Buscando ${obj}`);
     }
 };
 
-recognition.onerror = (err) => console.error("Error de reconocimiento:", err);
-
-// --- LÓGICA DE DETECCIÓN ---
-async function initIA() {
-    statusElem.textContent = "Cargando IA...";
-    model = await cocoSsd.load();
-    statusElem.textContent = "IA Lista. Di 'Detectar [objeto]'";
-}
-
+// --- CONTROL DE CÁMARA (AJUSTE MÓVIL) ---
 async function start() {
+    if (streaming) return;
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
+        // AJUSTE: environment activa la cámara trasera en celulares
+        const constraints = { 
+            video: { 
+                facingMode: "environment",
+                width: { ideal: 640 },
+                height: { ideal: 480 }
+            } 
+        };
+        
+        const s = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = s;
         video.onloadedmetadata = () => {
             video.play();
             canvas.width = video.videoWidth;
@@ -70,58 +76,71 @@ async function start() {
             streaming = true;
             startButton.disabled = true;
             stopButton.disabled = false;
-            recognition.start(); // Iniciar escucha
-            predictLoop();
+            hablar("Cámara trasera activa");
+            predict();
         };
-    } catch (err) {
-        statusElem.textContent = "Error: Acceso denegado.";
+    } catch (e) { 
+        statusElem.textContent = "Error: Use HTTPS y permita la cámara.";
+        alert("La cámara requiere HTTPS para funcionar en el celular."); 
     }
 }
 
-async function predictLoop() {
-    if (!streaming) return;
-    const predictions = await model.detect(video);
+function stop() {
+    streaming = false;
+    if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+    startButton.disabled = false;
+    stopButton.disabled = true;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    hablar("Detección apagada");
+}
 
-    const filtro = inputText.value.toLowerCase().trim();
+// --- BUCLE DE DETECCIÓN IA ---
+async function predict() {
+    if (!streaming) return;
+    const preds = await model.detect(video);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const filter = inputText.value.toLowerCase().trim();
 
-    predictions.forEach(p => {
-        if (p.score > 0.50) {
-            const nombreIng = p.class.toLowerCase();
-            const nombreEsp = traducciones[nombreIng] || nombreIng;
+    preds.forEach(p => {
+        if (p.score > 0.6) { 
+            const esp = traducciones[p.class.toLowerCase()] || p.class.toLowerCase();
             
-            if (filtro === "" || nombreEsp.includes(filtro) || nombreIng.includes(filtro)) {
-                const [x, y, width, height] = p.bbox;
-                ctx.strokeStyle = "#00ff88";
-                ctx.lineWidth = 3;
-                ctx.strokeRect(x, y, width, height);
-                ctx.fillStyle = "#00ff88";
-                ctx.fillText(nombreEsp.toUpperCase(), x, y > 20 ? y - 10 : 20);
+            if (filter === "" || esp.includes(filter)) {
+                const [x, y, w, h] = p.bbox;
+                
+                // Dibujo de cuadro verde
+                ctx.strokeStyle = "#22c55e";
+                ctx.lineWidth = 5;
+                ctx.strokeRect(x, y, w, h);
+                
+                // Texto en pantalla
+                ctx.fillStyle = "#22c55e";
+                ctx.font = "bold 20px sans-serif";
+                ctx.fillText(esp.toUpperCase(), x, y > 25 ? y - 10 : 25);
 
-                // --- LÓGICA DE VOZ (Repite solo si es un objeto nuevo) ---
-                if (ultimaDeteccion !== nombreEsp) {
-                    hablar(`He detectado un ${nombreEsp}`);
-                    ultimaDeteccion = nombreEsp;
-                    
-                    // Limpiar la memoria de voz tras 3 segundos para que pueda volver a avisar
-                    setTimeout(() => { ultimaDeteccion = ""; }, 3000);
+                // Lógica de audio con bloqueo por repetición
+                if (ultimaDeteccion !== esp) {
+                    ultimaDeteccion = esp; 
+                    hablar(`Detectado: ${esp}`);
                 }
             }
         }
     });
-    requestAnimationFrame(predictLoop);
+    requestAnimationFrame(predict);
 }
 
-stopButton.onclick = () => {
-    streaming = false;
-    recognition.stop();
-    const stream = video.srcObject;
-    if(stream) stream.getTracks().forEach(t => t.stop());
-    video.srcObject = null;
-    startButton.disabled = false;
-    stopButton.disabled = true;
-    statusElem.textContent = "Sistema detenido.";
-};
+// Inicialización del modelo al cargar la web
+(async () => {
+    try {
+        model = await cocoSsd.load();
+        statusElem.textContent = "IA Lista. Di 'Iniciar'.";
+        rec.start();
+    } catch(err) {
+        statusElem.textContent = "Error cargando modelo.";
+    }
+})();
 
 startButton.onclick = start;
-initIA();
+stopButton.onclick = stop;
